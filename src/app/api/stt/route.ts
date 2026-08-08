@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { config } from '@/config';
 
 /**
  * 语音识别 API
- * 接收音频文件，使用 Whisper API 转写文字
+ * 使用常驻 faster-whisper 服务（模型内存常驻，无需重复加载）
  */
+const STT_SERVER = 'http://127.0.0.1:9090';
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -17,31 +18,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 调用 OpenAI Whisper API
-    const whisperFormData = new FormData();
-    whisperFormData.append('file', audioFile);
-    whisperFormData.append('model', 'whisper-1');
-    whisperFormData.append('language', 'en');
-
-    const response = await fetch(`${config.ai.baseUrl}/audio/transcriptions`, {
+    // 直接发送音频数据到常驻 STT 服务
+    const buffer = await audioFile.arrayBuffer();
+    const response = await fetch(STT_SERVER, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.ai.apiKey}`,
-      },
-      body: whisperFormData,
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buffer,
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('Whisper API error:', response.status, error);
-      return NextResponse.json(
-        { text: '' },
-        { status: 200 }
-      );
-    }
-
-    const data = await response.json();
-    return NextResponse.json({ text: data.text || '' });
+    const result = await response.json();
+    return NextResponse.json({
+      text: result.text || '',
+      language: result.language || '',
+    });
   } catch (error) {
     console.error('STT API error:', error);
     return NextResponse.json(

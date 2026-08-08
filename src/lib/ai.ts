@@ -42,7 +42,7 @@ You MUST respond with valid JSON only. No markdown, no code blocks, no other tex
 
 /**
  * 调用 AI API 获取对话响应
- * 支持传入对话历史以实现上下文记忆
+ * 支持双模型自动轮换（一个 key 两个模型，额度翻倍）
  */
 export async function getAIResponse(
   userText: string,
@@ -52,12 +52,10 @@ export async function getAIResponse(
 ): Promise<AIResponse> {
   const systemPrompt = buildSystemPrompt(scenario, difficulty);
 
-  // 构建消息列表：system + 历史对话 + 当前消息
   const messages: { role: string; content: string }[] = [
     { role: 'system', content: systemPrompt },
   ];
 
-  // 加入历史对话（最多最近 10 轮）
   if (history && history.length > 0) {
     const recentHistory = history.slice(-10);
     for (const msg of recentHistory) {
@@ -65,54 +63,84 @@ export async function getAIResponse(
     }
   }
 
-  // 当前用户消息
   messages.push({ role: 'user', content: `[User said]: ${userText}` });
 
-  const response = await fetch(`${config.ai.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.ai.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.ai.model,
-      messages,
-      temperature: config.ai.temperature,
-      max_tokens: config.ai.maxTokens,
-    }),
-  });
+  // 模型轮换：每次请求轮换主模型和备用模型
+  const models = [config.ai.model, config.ai.fallbackModel].filter(Boolean);
+  // 全局计数器，每次请求自增，实现轮换
+  const g = globalThis as any;
+  g.__aiRequestIndex = (g.__aiRequestIndex || 0) + 1;
+  const startIndex = g.__aiRequestIndex % models.length;
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`AI API error: ${response.status} ${error}`);
-  }
+  let lastError: Error | null = null;
 
-  const data = await response.json();
-  let content = data.choices?.[0]?.message?.content;
+  for (let i = 0; i < models.length; i++) {
+    const modelIndex = (startIndex + i) % models.length;
+    const currentModel = models[modelIndex];
+    if (!currentModel) continue;
 
-  if (!content) {
-    throw new Error('AI returned empty response');
-  }
+    try {
+      const response = await fetch(`${config.ai.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.ai.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: currentModel,
+          messages,
+          temperature: config.ai.temperature,
+          max_tokens: config.ai.maxTokens,
+        }),
+      });
 
-  // 从 markdown 代码块中提取 JSON
-  const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/) || content.match(/\{[\s\S]*"english"[\s\S]*"chinese"[\s\S]*\}/);
-  if (jsonMatch) {
-    content = jsonMatch[1] || jsonMatch[0];
-  }
+      if (!response.ok) {
+        if (response.status === 429) {
+          lastError = new Error(`Rate limited on ${currentModel}`);
+          console.warn(`[Model Rotate] ${currentModel} rate limited, switching...`);
+          continue;
+        }
+        const error = await response.text();
+        throw new Error(`AI API error (${currentModel}): ${response.status} ${error}`);
+      }
 
-  try {
-    const parsed = JSON.parse(content) as AIResponse;
-    if (!parsed.english || !parsed.chinese) {
-      throw new Error('Invalid AI response structure');
+      const data = await response.json();
+      let content = data.choices?.[0]?.message?.content;
+
+      if (!content) {
+        // 空内容，尝试下一个模型
+        lastError = new Error(`Empty response from ${currentModel}`);
+        console.warn(`[Model Rotate] ${currentModel} empty content, switching...`);
+        continue;
+      }
+
+      // 从 markdown 代码块中提取 JSON
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/) || content.match(/\{[\s\S]*"english"[\s\S]*"chinese"[\s\S]*\}/);
+      if (jsonMatch) {
+        content = jsonMatch[1] || jsonMatch[0];
+      }
+
+      try {
+        const parsed = JSON.parse(content) as AIResponse;
+        if (!parsed.english || !parsed.chinese) {
+          throw new Error('Invalid AI response structure');
+        }
+        return parsed;
+      } catch {
+        return {
+          english: content,
+          chinese: '（翻译处理中...）',
+          correction: null,
+        };
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.warn(`[Model Rotate] ${currentModel} failed:`, lastError.message);
     }
-    return parsed;
-  } catch {
-    return {
-      english: content,
-      chinese: '（翻译处理中...）',
-      correction: null,
-    };
   }
+
+  // 所有模型都失败了
+  throw lastError || new Error('All models failed');
 }
 
 /**

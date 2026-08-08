@@ -12,14 +12,17 @@ export const config = {
   // 服务端口
   port: parseInt(process.env.PORT || '3001', 10),
 
-  // AI 模型配置
+  // AI 模型配置（支持多模型自动轮换）
   ai: {
-    // 默认使用环境变量中的 API Key
     apiKey: process.env.AI_API_KEY || '',
     baseUrl: process.env.AI_BASE_URL || 'https://api.openai.com/v1',
-    model: process.env.AI_MODEL || 'gpt-4o-mini',
+    // 主模型
+    model: process.env.AI_MODEL || 'deepseek-v4-flash',
+    // 备用模型（主模型超限时自动切换）
+    fallbackModel: process.env.AI_FALLBACK_MODEL || 'sensenova-6.7-flash-lite',
     temperature: 0.7,
-    maxTokens: 800,
+    // 推理模型需要更多 token 预算（默认 1000）
+    maxTokens: parseInt(process.env.AI_MAX_TOKENS || '1000', 10),
   },
 
   // 语音配置
