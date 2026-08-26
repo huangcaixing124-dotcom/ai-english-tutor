@@ -1,6 +1,6 @@
 /**
  * WebSocket 语音对话服务（独立进程）
- * 在端口 3003 运行，通过 Caddy 反向代理到 /api/voice-ws
+ * 在端口 3050 运行，通过 Caddy 反向代理到 api-backup.hcxserver.xyz
  *
  * 流式流水线：ASR → AI(流式) → TTS
  *
@@ -19,7 +19,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 
-const WS_PORT = 3003;
+const WS_PORT = 3050;
 const STT_SERVER = 'http://127.0.0.1:9090';
 const TTS_SERVER = 'http://127.0.0.1:9091';
 
